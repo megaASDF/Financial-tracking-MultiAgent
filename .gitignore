@@ -1,0 +1,18 @@
+# Môi trường ảo
+venv/
+.venv/
+
+# Bytecode đã biên dịch
+__pycache__/
+*.pyc
+
+# File cấu hình bí mật
+.env
+.env_zalo
+.env_telegram
+
+# File log
+*.log
+
+# Thư mục cấu hình IDE/Editor (Ví dụ cho VS Code)
+.vscode/
