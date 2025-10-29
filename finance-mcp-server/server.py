@@ -1,179 +1,355 @@
 """
-Finance MCP Server
-Provides stock market data, company info, and financial news tools
+Finance MCP Server - Yahoo Finance + VNDirect Edition
+Provides comprehensive stock data for US & Vietnamese markets
+- Uses Yahoo Finance for US stocks (no rate limits!)
+- Uses VNDirect for Vietnamese stocks
+- Full historical data support
 """
 
 from fastmcp import FastMCP
 import httpx
 from datetime import datetime, timedelta
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 # Initialize FastMCP server
 mcp = FastMCP("finance-server")
 
-# You'll need API keys - get free ones from:
-# Alpha Vantage: https://www.alphavantage.co/support/#api-key
-# NewsAPI: https://newsapi.org/register
+# Create executor for running sync yfinance code
+executor = ThreadPoolExecutor(max_workers=3)
 
-ALPHA_VANTAGE_API_KEY ="G96FOP6NZOOXV1KO"  # Replace with your key
+# Import yfinance
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+    print("Warning: yfinance not installed. US stock features will be limited.")
+
+NEWS_API_KEY = "your_newsapi_key"
+
+
+def is_vietnamese_stock(symbol: str) -> bool:
+    """Check if symbol is Vietnamese (typically 3 letters without .VN suffix)"""
+    clean_symbol = symbol.replace('.VN', '')
+    return len(clean_symbol) <= 3 and clean_symbol.isalpha()
 
 
 @mcp.tool()
 async def get_stock_price(symbol: str) -> dict:
     """
-    Get current stock price and basic info for a given ticker symbol.
+    Get current stock price for US or Vietnamese stocks.
     
     Args:
-        symbol: Stock ticker symbol (e.g., 'AAPL', 'GOOGL', 'MSFT')
+        symbol: Stock ticker (US: 'AAPL', 'GOOGL' | VN: 'VNM', 'VCB', 'FPT')
     
     Returns:
         Dictionary with current price, change, and volume
     """
+    symbol = symbol.upper()
+    
     try:
-        url = f"https://www.alphavantage.co/query"
-        params = {
-            "function": "GLOBAL_QUOTE",
-            "symbol": symbol.upper(),
-            "apikey": ALPHA_VANTAGE_API_KEY
-        }
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=10.0)
-            data = response.json()
-        
-        if "Global Quote" not in data or not data["Global Quote"]:
+        if is_vietnamese_stock(symbol):
+            # Add .VN suffix for Yahoo Finance
+            yf_symbol = f"{symbol}.VN"
+            
+            def get_yf_data():
+                ticker = yf.Ticker(yf_symbol)
+                info = ticker.info
+                hist = ticker.history(period="2d")
+                return info, hist
+            
+            loop = asyncio.get_event_loop()
+            info, hist = await loop.run_in_executor(executor, get_yf_data)
+            
+            if hist.empty:
+                return {"error": f"No data for Vietnamese stock '{symbol}'"}
+            
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) > 1 else latest
+            
+            change = latest['Close'] - prev['Close']
+            change_pct = (change / prev['Close'] * 100) if prev['Close'] != 0 else 0
+            
             return {
-                "error": f"Stock symbol '{symbol}' not found or API limit reached",
-                "tip": "Try again in a minute or check if the symbol is correct"
+                "symbol": symbol,
+                "exchange": "Vietnam (HOSE/HNX)",
+                "price": f"{latest['Close']:,.0f} VND",
+                "change": f"{change:,.0f} VND",
+                "change_percent": f"{change_pct:.2f}%",
+                "volume": f"{int(latest['Volume']):,}",
+                "high": f"{latest['High']:,.0f} VND",
+                "low": f"{latest['Low']:,.0f} VND",
+                "market_cap": f"{info.get('marketCap', 0):,.0f} VND" if info.get('marketCap') else "N/A",
+                "last_updated": latest.name.strftime('%Y-%m-%d')
             }
         
-        quote = data["Global Quote"]
-        return {
-            "symbol": quote.get("01. symbol", symbol),
-            "price": quote.get("05. price", "N/A"),
-            "change": quote.get("09. change", "N/A"),
-            "change_percent": quote.get("10. change percent", "N/A"),
-            "volume": quote.get("06. volume", "N/A"),
-            "last_updated": quote.get("07. latest trading day", "N/A")
-        }
+        else:
+            # Yahoo Finance for US stocks
+            def get_yf_data():
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+                hist = ticker.history(period="2d")
+                return info, hist
+            
+            loop = asyncio.get_event_loop()
+            info, hist = await loop.run_in_executor(executor, get_yf_data)
+            
+            if hist.empty:
+                return {"error": f"US stock '{symbol}' not found"}
+            
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) > 1 else latest
+            
+            change = latest['Close'] - prev['Close']
+            change_pct = (change / prev['Close'] * 100) if prev['Close'] != 0 else 0
+            
+            return {
+                "symbol": symbol,
+                "exchange": info.get("exchange", "US Market"),
+                "price": f"${latest['Close']:.2f}",
+                "change": f"${change:.2f}",
+                "change_percent": f"{change_pct:.2f}%",
+                "volume": f"{int(latest['Volume']):,}",
+                "market_cap": f"${info.get('marketCap', 0):,}" if info.get('marketCap') else "N/A",
+                "last_updated": latest.name.strftime('%Y-%m-%d')
+            }
     
     except Exception as e:
         return {"error": f"Failed to fetch stock price: {str(e)}"}
 
 
 @mcp.tool()
-async def get_company_overview(symbol: str) -> dict:
+async def get_stock_history(symbol: str, start_date: str, end_date: str) -> dict:
     """
-    Get detailed company information including sector, market cap, and financial metrics.
+    Get historical stock prices for a specific date range.
     
     Args:
-        symbol: Stock ticker symbol (e.g., 'AAPL', 'GOOGL')
+        symbol: Stock ticker (e.g., 'VNM', 'AAPL')
+        start_date: Start date in YYYY-MM-DD format (e.g., '2025-09-15')
+        end_date: End date in YYYY-MM-DD format (e.g., '2025-09-20')
+    
+    Returns:
+        Historical price data for the date range
+    """
+    symbol = symbol.upper()
+    
+    try:
+        # Add .VN suffix for Vietnamese stocks
+        yf_symbol = f"{symbol}.VN" if is_vietnamese_stock(symbol) else symbol
+        
+        def get_yf_history():
+            ticker = yf.Ticker(yf_symbol)
+            hist = ticker.history(start=start_date, end=end_date)
+            return hist
+        
+        loop = asyncio.get_event_loop()
+        hist = await loop.run_in_executor(executor, get_yf_history)
+        
+        if hist.empty:
+            return {
+                "error": f"No historical data for {symbol} in the specified date range",
+                "tip": "Make sure dates are in the past and market was open"
+            }
+        
+        history = []
+        is_vn = is_vietnamese_stock(symbol)
+        
+        for date, row in hist.iterrows():
+            if is_vn:
+                history.append({
+                    "date": date.strftime('%Y-%m-%d'),
+                    "close": f"{row['Close']:,.0f} VND",
+                    "open": f"{row['Open']:,.0f} VND",
+                    "high": f"{row['High']:,.0f} VND",
+                    "low": f"{row['Low']:,.0f} VND",
+                    "volume": f"{int(row['Volume']):,}"
+                })
+            else:
+                history.append({
+                    "date": date.strftime('%Y-%m-%d'),
+                    "close": f"${row['Close']:.2f}",
+                    "open": f"${row['Open']:.2f}",
+                    "high": f"${row['High']:.2f}",
+                    "low": f"${row['Low']:.2f}",
+                    "volume": f"{int(row['Volume']):,}"
+                })
+        
+        return {
+            "symbol": symbol,
+            "exchange": "Vietnam" if is_vn else "US Market",
+            "start_date": start_date,
+            "end_date": end_date,
+            "data_points": len(history),
+            "history": history
+        }
+    
+    except Exception as e:
+        return {"error": f"Failed to get historical data: {str(e)}"}
+
+
+@mcp.tool()
+async def get_company_overview(symbol: str) -> dict:
+    """
+    Get detailed company information.
+    
+    Args:
+        symbol: Stock ticker (US: 'AAPL' | VN: 'VNM', 'VCB')
     
     Returns:
         Dictionary with company overview data
     """
+    symbol = symbol.upper()
+    
     try:
-        url = f"https://www.alphavantage.co/query"
-        params = {
-            "function": "OVERVIEW",
-            "symbol": symbol.upper(),
-            "apikey": ALPHA_VANTAGE_API_KEY
-        }
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=10.0)
-            data = response.json()
-        
-        if not data or "Symbol" not in data:
+        if is_vietnamese_stock(symbol):
+            # VNDirect API for VN company data
+            url = f"https://finfo-api.vndirect.com.vn/v4/stocks/{symbol}"
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, timeout=10.0)
+                data = response.json()
+            
+            if not data or "code" in data:
+                # Fallback to Yahoo Finance
+                yf_symbol = f"{symbol}.VN"
+                
+                def get_yf_info():
+                    ticker = yf.Ticker(yf_symbol)
+                    return ticker.info
+                
+                loop = asyncio.get_event_loop()
+                info = await loop.run_in_executor(executor, get_yf_info)
+                
+                return {
+                    "symbol": symbol,
+                    "name": info.get('longName', 'N/A'),
+                    "exchange": "Vietnam",
+                    "industry": info.get('industry', 'N/A'),
+                    "sector": info.get('sector', 'N/A'),
+                    "website": info.get('website', 'N/A'),
+                    "description": info.get('longBusinessSummary', 'N/A')[:500],
+                    "employees": info.get('fullTimeEmployees', 'N/A'),
+                    "market_cap": f"{info.get('marketCap', 0):,.0f} VND" if info.get('marketCap') else "N/A"
+                }
+            
             return {
-                "error": f"Company data for '{symbol}' not found",
-                "tip": "Check if the ticker symbol is correct"
+                "symbol": symbol,
+                "name": data.get('companyName', 'N/A'),
+                "exchange": data.get('exchange', 'Vietnam'),
+                "industry": data.get('industryName', 'N/A'),
+                "sector": data.get('icbName', 'N/A'),
+                "website": data.get('website', 'N/A'),
+                "employees": data.get('noEmployees', 'N/A'),
+                "listing_date": data.get('issueDate', 'N/A'),
+                "outstanding_shares": f"{data.get('outstandingShare', 0):,.0f}",
+                "charter_capital": f"{data.get('charteredCapital', 0):,.0f} VND"
             }
         
-        return {
-            "symbol": data.get("Symbol", symbol),
-            "name": data.get("Name", "N/A"),
-            "description": data.get("Description", "N/A")[:500] + "...",
-            "sector": data.get("Sector", "N/A"),
-            "industry": data.get("Industry", "N/A"),
-            "market_cap": data.get("MarketCapitalization", "N/A"),
-            "pe_ratio": data.get("PERatio", "N/A"),
-            "dividend_yield": data.get("DividendYield", "N/A"),
-            "52_week_high": data.get("52WeekHigh", "N/A"),
-            "52_week_low": data.get("52WeekLow", "N/A")
-        }
+        else:
+            # Yahoo Finance for US stocks
+            def get_yf_info():
+                ticker = yf.Ticker(symbol)
+                return ticker.info
+            
+            loop = asyncio.get_event_loop()
+            info = await loop.run_in_executor(executor, get_yf_info)
+            
+            if not info or 'symbol' not in info:
+                return {"error": f"Company data for '{symbol}' not found"}
+            
+            return {
+                "symbol": symbol,
+                "name": info.get("longName", "N/A"),
+                "exchange": info.get("exchange", "US Market"),
+                "description": info.get("longBusinessSummary", "N/A")[:500] + "...",
+                "sector": info.get("sector", "N/A"),
+                "industry": info.get("industry", "N/A"),
+                "market_cap": f"${info.get('marketCap', 0):,}" if info.get('marketCap') else "N/A",
+                "pe_ratio": info.get("trailingPE", "N/A"),
+                "dividend_yield": f"{info.get('dividendYield', 0) * 100:.2f}%" if info.get('dividendYield') else "N/A",
+                "52_week_high": f"${info.get('fiftyTwoWeekHigh', 0):.2f}" if info.get('fiftyTwoWeekHigh') else "N/A",
+                "52_week_low": f"${info.get('fiftyTwoWeekLow', 0):.2f}" if info.get('fiftyTwoWeekLow') else "N/A",
+                "employees": info.get("fullTimeEmployees", "N/A"),
+                "website": info.get("website", "N/A")
+            }
     
     except Exception as e:
         return {"error": f"Failed to fetch company overview: {str(e)}"}
 
 
 @mcp.tool()
-async def get_financial_statements(symbol: str, statement_type: str = "income") -> dict:
+async def get_vn_company_financials(symbol: str) -> dict:
     """
-    Get financial statements (income statement, balance sheet, or cash flow).
+    Get comprehensive financial metrics for Vietnamese companies.
     
     Args:
-        symbol: Stock ticker symbol (e.g., 'AAPL')
-        statement_type: Type of statement - 'income', 'balance', or 'cashflow'
+        symbol: Vietnamese stock ticker (e.g., 'VNM', 'VCB', 'FPT')
     
     Returns:
-        Dictionary with annual financial data
+        Dictionary with detailed financial metrics
     """
     try:
-        function_map = {
-            "income": "INCOME_STATEMENT",
-            "balance": "BALANCE_SHEET",
-            "cashflow": "CASH_FLOW"
-        }
+        symbol = symbol.upper()
         
-        function = function_map.get(statement_type.lower(), "INCOME_STATEMENT")
+        # Try Yahoo Finance first (fastest)
+        yf_symbol = f"{symbol}.VN"
         
-        url = f"https://www.alphavantage.co/query"
-        params = {
-            "function": function,
-            "symbol": symbol.upper(),
-            "apikey": ALPHA_VANTAGE_API_KEY
-        }
+        def get_yf_info():
+            ticker = yf.Ticker(yf_symbol)
+            return ticker.info
         
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=10.0)
-            data = response.json()
+        loop = asyncio.get_event_loop()
+        info = await loop.run_in_executor(executor, get_yf_info)
         
-        if "annualReports" not in data or not data["annualReports"]:
-            return {
-                "error": f"Financial statements for '{symbol}' not available",
-                "tip": "Try a different stock or check back later"
-            }
+        # Also try VNDirect for additional data
+        url = f"https://finfo-api.vndirect.com.vn/v4/ratios"
+        params = {"q": f"code:{symbol}", "size": 1}
         
-        # Get the most recent annual report
-        latest = data["annualReports"][0]
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, params=params, timeout=10.0)
+                vnd_data = response.json()
+            vnd_info = vnd_data["data"][0] if vnd_data.get("data") else {}
+        except:
+            vnd_info = {}
         
         return {
-            "symbol": data.get("symbol", symbol),
-            "statement_type": statement_type,
-            "fiscal_date": latest.get("fiscalDateEnding", "N/A"),
-            "data": latest
+            "symbol": symbol,
+            "market_cap": f"{info.get('marketCap', 0):,.0f} VND" if info.get('marketCap') else "N/A",
+            "pe_ratio": info.get("trailingPE") or vnd_info.get("pe", "N/A"),
+            "pb_ratio": info.get("priceToBook") or vnd_info.get("pb", "N/A"),
+            "ps_ratio": vnd_info.get("ps", "N/A"),
+            "roe": f"{vnd_info.get('roe', 0):.2f}%" if vnd_info.get('roe') else "N/A",
+            "roa": f"{vnd_info.get('roa', 0):.2f}%" if vnd_info.get('roa') else "N/A",
+            "eps": info.get("trailingEps") or vnd_info.get("eps", "N/A"),
+            "book_value_per_share": f"{info.get('bookValue', 0):,.0f} VND" if info.get('bookValue') else "N/A",
+            "dividend_yield": f"{info.get('dividendYield', 0) * 100:.2f}%" if info.get('dividendYield') else "N/A",
+            "profit_margin": f"{info.get('profitMargins', 0) * 100:.2f}%" if info.get('profitMargins') else "N/A",
+            "debt_to_equity": info.get("debtToEquity") or vnd_info.get("debtOverEquity", "N/A"),
+            "current_ratio": info.get("currentRatio") or vnd_info.get("currentRatio", "N/A"),
+            "revenue_growth": f"{info.get('revenueGrowth', 0) * 100:.2f}%" if info.get('revenueGrowth') else "N/A"
         }
     
     except Exception as e:
-        return {"error": f"Failed to fetch financial statements: {str(e)}"}
+        return {"error": f"Failed to get financial data: {str(e)}"}
 
 
 @mcp.tool()
-async def get_market_news(query: str = "stock market", limit: int = 5) -> dict:
+async def get_market_news(query: str = "stock market", language: str = "en", limit: int = 5) -> dict:
     """
-    Get latest financial and market news articles.
+    Get latest financial news.
     
     Args:
-        query: Search query for news (e.g., 'Apple stock', 'tech stocks')
-        limit: Number of articles to return (1-10)
+        query: Search query (e.g., 'VNM stock', 'Apple')
+        language: 'en' for English or 'vi' for Vietnamese
+        limit: Number of articles (1-10)
     
     Returns:
         Dictionary with news articles
     """
     try:
-        limit = min(max(1, limit), 10)  # Ensure limit is between 1-10
-        
-        # Calculate date 7 days ago for recent news
+        limit = min(max(1, limit), 10)
         from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
         
         url = "https://newsapi.org/v2/everything"
@@ -181,7 +357,7 @@ async def get_market_news(query: str = "stock market", limit: int = 5) -> dict:
             "q": query,
             "from": from_date,
             "sortBy": "publishedAt",
-            "language": "en",
+            "language": language if language == "en" else "en",
             "pageSize": limit,
             "apiKey": NEWS_API_KEY
         }
@@ -191,10 +367,7 @@ async def get_market_news(query: str = "stock market", limit: int = 5) -> dict:
             data = response.json()
         
         if data.get("status") != "ok":
-            return {
-                "error": "Failed to fetch news",
-                "message": data.get("message", "Unknown error")
-            }
+            return {"error": "Failed to fetch news", "tip": "Check API key"}
         
         articles = []
         for article in data.get("articles", []):
@@ -217,51 +390,85 @@ async def get_market_news(query: str = "stock market", limit: int = 5) -> dict:
 
 
 @mcp.tool()
-async def search_stocks(keywords: str) -> dict:
+async def search_vietnamese_stocks(keywords: str) -> dict:
     """
-    Search for stocks by company name or keywords.
+    Search for Vietnamese stocks by company name.
     
     Args:
-        keywords: Company name or keywords to search (e.g., 'Apple', 'Tesla')
+        keywords: Company name in Vietnamese (e.g., 'Vinamilk', 'Vietcombank')
     
     Returns:
-        List of matching stocks with symbols
+        List of matching Vietnamese stocks
     """
     try:
-        url = f"https://www.alphavantage.co/query"
+        url = "https://finfo-api.vndirect.com.vn/v4/stocks"
         params = {
-            "function": "SYMBOL_SEARCH",
-            "keywords": keywords,
-            "apikey": ALPHA_VANTAGE_API_KEY
+            "q": f"companyName~{keywords}",
+            "size": 10
         }
         
         async with httpx.AsyncClient() as client:
             response = await client.get(url, params=params, timeout=10.0)
             data = response.json()
         
-        if "bestMatches" not in data:
-            return {
-                "error": "No matches found",
-                "tip": "Try different keywords or check spelling"
-            }
+        if not data or "data" not in data or not data["data"]:
+            return {"error": "No matching stocks found"}
         
-        results = []
-        for match in data["bestMatches"][:5]:  # Top 5 results
-            results.append({
-                "symbol": match.get("1. symbol", "N/A"),
-                "name": match.get("2. name", "N/A"),
-                "type": match.get("3. type", "N/A"),
-                "region": match.get("4. region", "N/A"),
-                "currency": match.get("8. currency", "N/A")
+        matches = []
+        for item in data["data"]:
+            matches.append({
+                "symbol": item.get("code", "N/A"),
+                "name": item.get("companyName", "N/A"),
+                "exchange": item.get("exchange", "N/A"),
+                "industry": item.get("industryName", "N/A")
             })
         
         return {
             "query": keywords,
-            "matches": results
+            "matches": matches
         }
     
     except Exception as e:
         return {"error": f"Failed to search stocks: {str(e)}"}
+
+
+@mcp.tool()
+async def get_vn_index() -> dict:
+    """
+    Get current VN-Index (Vietnamese stock market index).
+    
+    Returns:
+        Dictionary with VN-Index data
+    """
+    try:
+        def get_yf_index():
+            ticker = yf.Ticker("^VNINDEX")
+            hist = ticker.history(period="2d")
+            return hist
+        
+        loop = asyncio.get_event_loop()
+        hist = await loop.run_in_executor(executor, get_yf_index)
+        
+        if hist.empty:
+            return {"error": "Failed to fetch VN-Index"}
+        
+        latest = hist.iloc[-1]
+        prev = hist.iloc[-2] if len(hist) > 1 else latest
+        
+        change = latest['Close'] - prev['Close']
+        change_pct = (change / prev['Close'] * 100) if prev['Close'] != 0 else 0
+        
+        return {
+            "index": "VN-Index",
+            "value": f"{latest['Close']:,.2f}",
+            "change": f"{change:,.2f}",
+            "change_percent": f"{change_pct:.2f}%",
+            "volume": f"{int(latest['Volume']):,}",
+            "date": latest.name.strftime('%Y-%m-%d')
+        }
+    
+    except Exception as e:
+        return {"error": f"Failed to fetch VN-Index: {str(e)}"}
 
 
 if __name__ == "__main__":
