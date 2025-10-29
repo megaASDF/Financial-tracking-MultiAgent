@@ -1,4 +1,6 @@
+# agent.py
 import os
+import sys 
 from datetime import datetime
 from dotenv import load_dotenv
 from google.adk.agents import Agent
@@ -6,16 +8,34 @@ from google.adk.tools import google_search
 from google.adk.tools.mcp_tool import MCPToolset
 from mcp.client.stdio import StdioServerParameters
 
+# --- Get the absolute path to THIS script's directory (multiagent) ---
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# --- MODIFIED: Go UP one level, then DOWN into finance-mcp-server ---
+server_script_path = os.path.join(script_dir, "..", "finance-mcp-server", "server.py")
+# This will correctly resolve to: .../google agent/finance-mcp-server/server.py
+
+# --- Get the absolute path to the current Python executable ---
+python_executable_path = sys.executable
+
+print("="*60)
+print(f"Agent directory is: {script_dir}")
+print(f"Attempting to launch MCP server at: {server_script_path}")
+print(f"Using Python interpreter: {python_executable_path}")
+print("="*60)
+
 mcp_toolset = MCPToolset(
     connection_params=StdioServerParameters(
-        command="python",
-        args=["finance-mcp-server/server.py"],
+        # --- Use the full Python path ---
+        command=python_executable_path,
+        # --- Use the correct server script path ---
+        args=[server_script_path],
         env=None
     )
 )
 
 root_agent = Agent(
-    model='gemini-2.5-pro', # Đảm bảo dùng model phù hợp
+    model='gemini-2.5-pro', 
     name='finance_agent',
     description='Trợ lý tài chính thông minh cho thị trường Việt Nam và Mỹ',
     instruction=f'''Bạn là FinAgent, một trợ lý tài chính chuyên nghiệp. Luôn trả lời bằng TIẾNG VIỆT.
@@ -42,7 +62,6 @@ QUY TẮC TRẢ LỜI CUỐI CÙNG:
 - Trình bày kết quả phân tích rõ ràng, súc tích.
 - Bao gồm các dữ liệu quan trọng (giá, thay đổi, khối lượng, ngày cập nhật...).
 - Luôn có câu: "Đây chỉ là thông tin tham khảo, không phải lời khuyên đầu tư."''',
-    # --- KẾT THÚC CẬP NHẬT ---
     tools=[
         google_search,
         mcp_toolset
