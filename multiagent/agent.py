@@ -35,7 +35,7 @@ mcp_toolset = MCPToolset(
 )
 
 root_agent = Agent(
-    model='gemini-2.5-pro', 
+    model='gemini-2.5-flash', 
     name='finance_agent',
     description='Trợ lý tài chính thông minh cho thị trường Việt Nam và Mỹ',
     instruction=f'''Bạn là FinAgent, một trợ lý tài chính chuyên nghiệp. Luôn trả lời bằng TIẾNG VIỆT.
