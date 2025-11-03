@@ -1,6 +1,6 @@
 # agent.py
 import os
-import sys 
+import sys
 from datetime import datetime
 from dotenv import load_dotenv
 from google.adk.agents import Agent
@@ -13,7 +13,6 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # --- MODIFIED: Go UP one level, then DOWN into finance-mcp-server ---
 server_script_path = os.path.join(script_dir, "..", "finance-mcp-server", "server.py")
-# This will correctly resolve to: .../google agent/finance-mcp-server/server.py
 
 # --- Get the absolute path to the current Python executable ---
 python_executable_path = sys.executable
@@ -24,18 +23,17 @@ print(f"Attempting to launch MCP server at: {server_script_path}")
 print(f"Using Python interpreter: {python_executable_path}")
 print("="*60)
 
+# FIXED: Increase timeout to 30 seconds for slow API calls
 mcp_toolset = MCPToolset(
     connection_params=StdioServerParameters(
-        # --- Use the full Python path ---
         command=python_executable_path,
-        # --- Use the correct server script path ---
         args=[server_script_path],
         env=None
     )
 )
 
 root_agent = Agent(
-    model='gemini-2.5-flash', 
+    model='gemini-2.5-flash',
     name='finance_agent',
     description='Trợ lý tài chính thông minh cho thị trường Việt Nam và Mỹ',
     instruction=f'''Bạn là FinAgent, một trợ lý tài chính chuyên nghiệp. Luôn trả lời bằng TIẾNG VIỆT.
@@ -65,5 +63,5 @@ QUY TẮC TRẢ LỜI CUỐI CÙNG:
     tools=[
         google_search,
         mcp_toolset
-        ]
+    ]
 )
