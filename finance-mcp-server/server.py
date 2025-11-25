@@ -208,7 +208,7 @@ async def get_company_overview(symbol: str) -> dict:
             url = f"https://finfo-api.vndirect.com.vn/v4/stocks/{symbol}"
             
             async with httpx.AsyncClient() as client:
-                response = await client.get(url, timeout=10.0)
+                response = await client.get(url, timeout=30.0)
                 data = response.json()
             
             if not data or "code" in data:
@@ -309,7 +309,7 @@ async def get_vn_company_financials(symbol: str) -> dict:
         
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get(url, params=params, timeout=10.0)
+                response = await client.get(url, params=params, timeout=30.0)
                 vnd_data = response.json()
             vnd_info = vnd_data["data"][0] if vnd_data.get("data") else {}
         except:
@@ -364,7 +364,7 @@ async def get_market_news(query: str = "stock market", language: str = "en", lim
         }
         
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=10.0)
+            response = await client.get(url, params=params, timeout=30.0)
             data = response.json()
         
         if data.get("status") != "ok":
@@ -409,7 +409,7 @@ async def search_vietnamese_stocks(keywords: str) -> dict:
         }
         
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=10.0)
+            response = await client.get(url, params=params, timeout=30.0)
             data = response.json()
         
         if not data or "data" not in data or not data["data"]:
