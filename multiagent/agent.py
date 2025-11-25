@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from google.adk.agents import Agent
 from google.adk.tools import google_search
 from google.adk.tools.mcp_tool import MCPToolset
+from google.adk.tools.agent_tool import AgentTool
 from mcp.client.stdio import StdioServerParameters
 
 # --- Get the absolute path to THIS script's directory (multiagent) ---
@@ -32,7 +33,22 @@ mcp_toolset = MCPToolset(
     )
 )
 
+search_agent = Agent(
+    model='gemini-2.5-flash', 
+    name='search_agent',
+    instruction='''You're a spealist in Google Search''',
+    tools=[google_search],
+)
+
+finance_info_agent = Agent(
+    model='gemini-2.5-flash',
+    name='finance_info_agent',
+    instruction='''You're a specialist in providing financial information about stocks, companies, and market trends.''',
+    tools=[mcp_toolset]
+)
+
 root_agent = Agent(
+    model='gemini-2.5-flash',
     model='gemini-2.5-flash',
     name='finance_agent',
     description='Trợ lý tài chính thông minh cho thị trường Việt Nam và Mỹ',

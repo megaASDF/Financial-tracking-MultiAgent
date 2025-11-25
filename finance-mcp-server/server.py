@@ -34,6 +34,7 @@ def is_vietnamese_stock(symbol: str) -> bool:
     clean_symbol = symbol.replace('.VN', '')
     return len(clean_symbol) <= 3 and clean_symbol.isalpha()
 
+# Tool Definitions
 
 @mcp.tool()
 async def get_stock_price(symbol: str) -> dict:
