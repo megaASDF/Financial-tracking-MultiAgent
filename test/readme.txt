@@ -1,0 +1,1 @@
+For testing purpose, move the test file from test folder to root folder, and run them with 'python file_name.py' command.
